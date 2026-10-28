@@ -14,15 +14,11 @@
   var FULL = 'Home holds nine apps. Remove one first.', LAST = 'Home needs one app';
 
   var PRIMARY_APPS = [
-    { id: 'stremio', name: 'Stremio', mark: true, appId: 'IkWsFHtOY9.Stremio' },
     { id: 'netflix', name: 'Netflix', mark: true, appId: 'org.tizen.netflix-app' },
     { id: 'disneyplus', name: 'Disney+', mark: true, appId: 'MCmYXNxgcu.DisneyPlus' },
     { id: 'youtube', name: 'YouTube', mark: true, appId: '9Ur5IzDKqV.TizenYouTube' },
-    { id: 'appletv', name: 'Apple TV', mark: true, appId: 'com.samsung.tv.aria-video' },
     { id: 'primevideo', name: 'Prime Video', mark: true, appId: 'org.tizen.primevideo' },
-    { id: 'abciview', name: 'ABC iview', mark: true, appId: 'mWK87Xghap.ABCiview' },
-    { id: 'sbs', name: 'SBS On Demand', mark: true, appId: 'OyE7OuxlUi.SBSOnDemand' },
-    { id: 'applemusic', name: 'Apple Music', mark: true, appId: 'org.tizen.apple.apple-music' }
+    { id: 'jellyfin', name: 'Jellyfin', mark: true, appId: 'AprZAARz4r.Jellyfin' }
   ];
   var PRIMARY = PRIMARY_APPS.map(function (a) { return a.id; }), APPS = PRIMARY_APPS.slice(), ALPHA = [];
   var WALLS = window.CleanFrameWallpapers || [{ id: 'misty', name: 'Misty coast', tone: 'light', ut: { tr: 'mist', br: 'mist' }, frostVeil: .20 }];
@@ -48,7 +44,7 @@
   var LOOK_VALUES = { bg: ['dark', 'light', 'photo'], layout: ['list', 'dock'], apps: ['icons', 'both', 'text'], font: Object.keys(FONTS).filter(function (id) { return id === 'manrope' || PRIVATE_FONTS.indexOf(id) >= 0; }), controls: ['icons', 'both', 'text'], focus: ['type', 'glass'], material: ['soft', 'frost', 'tint'] };
   var LOOK_NAMES = { bg: 'Background', layout: 'Layout', apps: 'Apps', font: 'Font', controls: 'Home controls', focus: 'Focus', material: 'Material' };
   var VALUE_NAMES = { dark: 'Dark', light: 'Light', photo: 'Photo', list: 'List', dock: 'Dock', type: 'Type', glass: 'Glass', soft: 'Soft', frost: 'Frost', tint: 'Clear tint', icons: 'Icons', both: 'Icons and text', text: 'Text' };
-  var UTIL = { art: ['Art Mode', 'art'], apps: ['All apps', 'apps'], arrange: ['Arrange', 'arrange'], settings: ['Settings', 'settings'] };
+  var UTIL = { art: ['Art Mode', 'art'], apps: ['All apps', 'apps'], inputs: ['Smart Hub', 'tv'], arrange: ['Arrange', 'arrange'], settings: ['Settings', 'settings'] };
   var MSG = {
     leave: { title: 'Leave Home?', line: 'Open Samsung Home?', note: '', actions: [['stay', 'Stay'], ['samsung', 'Samsung Home']] }
   };
@@ -443,6 +439,54 @@
   }
 
   var busy = false, busyTimer = 0;
+  /* Relaunch CleanFrame to the foreground. */
+  function ownId() {
+    try { return tizen.application.getCurrentApplication().appInfo.id; } catch (e) { return 'cb4ja0xqj5.CleanFrame'; }
+  }
+  function bounceBack() {
+    if (!document.hidden) return;
+    try { tizen.application.launch(ownId(), function () {}, function () {}); } catch (e) {}
+  }
+  /* Home bounce-back, two layers. (1) The visibilitychange handler (below): if CleanFrame is hidden
+     without our having just opened something - i.e. the Home button, from CleanFrame itself - relaunch
+     after 1.5s; needs no network. (2) startWatch: while an app we opened reports itself on screen via
+     the TV's local status service (127.0.0.1:8001), bring CleanFrame back when it leaves. Works for
+     apps that report their own visibility (e.g. Jellyfin). The Samsung-integrated apps (Netflix,
+     YouTube, ...) run in a resident engine that always reports vis=false and freezes this page while
+     foreground, and 8001 returns 404 for the home screen on this firmware (1720), so Home from those
+     apps cannot be caught here - not by a page and not by a background service. */
+  var lastLaunchAt = 0, bounceTimer = 0, watchTimer = 0;
+  function appState(appId, done) {
+    try {
+      var x = new XMLHttpRequest();
+      x.open('GET', 'http://127.0.0.1:8001/api/v2/applications/' + appId, true);
+      x.timeout = 1500;
+      x.onreadystatechange = function () {
+        if (x.readyState !== 4) return;
+        try { var j = JSON.parse(x.responseText); done(x.status === 200 && typeof j.running === 'boolean' ? { running: j.running, visible: !!j.visible } : null); }
+        catch (e) { done(null); }
+      };
+      x.ontimeout = function () { done(null); };
+      x.onerror = function () { done(null); };
+      x.send();
+    } catch (e) { done(null); }
+  }
+  function stopWatch() { if (watchTimer) { clearInterval(watchTimer); watchTimer = 0; } }
+  function startWatch(appId) {
+    stopWatch();
+    var seen = false, stops = 0, started = Date.now();
+    watchTimer = setInterval(function () {
+      if (Date.now() - started > 3 * 60 * 60 * 1000) { stopWatch(); return; }
+      appState(appId, function (st) {
+        if (!watchTimer) return;
+        if (st == null) return;
+        if (st.running && st.visible) { seen = true; stops = 0; return; }
+        if (!seen) { if (Date.now() - started > 30000) stopWatch(); return; }
+        if (st.running && !st.visible) { stopWatch(); bounceBack(); return; }
+        if (!st.running) { if (++stops < 2) return; stopWatch(); bounceBack(); return; }
+      });
+    }, 1000);
+  }
   function release() { busy = false; clearTimeout(busyTimer); S.press = null; }
   function message(title, line, note) {
     push({ id: 'message', msg: 'error', content: { title: title, line: line, note: note || '', actions: [['back', 'Back']] }, f: { b: 0 } });
@@ -450,6 +494,7 @@
   function perform(title, run) {
     if (busy) return;
     busy = true; busyTimer = setTimeout(release, 10000);
+    lastLaunchAt = Date.now();
     run(function (err) {
       release();
       if (err) message(title, err.message || 'The TV could not open this screen.', err.detail || '');
@@ -461,7 +506,7 @@
     if (!a || busy) return;
     if (S.c.home.indexOf(id) >= 0) { c = next(S.c.home.slice(), S.c.recent.slice()); c.lastApp = id; write(c, 'Last app'); }
     S.press = id; S.lastLaunch = a.name;
-    perform(a.name, function (done) { FrameDevice.launchApp(a.appId, done); });
+    perform(a.name, function (done) { FrameDevice.launchApp(a.appId, function (err) { if (!err) startWatch(a.appId); done(err); }); });
   }
   function refreshCatalog() {
     var request, oldFocus;
@@ -491,7 +536,7 @@
   }
 
   /* ---------- Navigation targets ---------- */
-  function utils() { return ['art', 'apps', 'settings']; }
+  function utils() { return ['art', 'apps', 'inputs', 'settings']; }
   /* prev/next run along the apps; out goes to the controls, inn comes back (or to a per-app action). */
   function axes() {
     var v = S.c.layout === 'list';
@@ -500,6 +545,7 @@
   function utilAction(u) {
     if (u === 'art') perform('Art Mode', FrameDevice.art);
     else if (u === 'apps') openApps();
+    else if (u === 'inputs') perform('Smart Hub', FrameDevice.home);
     else openSettings();
   }
   function addAppsRoute() { openEditor('home'); }
@@ -1839,10 +1885,14 @@
   window.addEventListener('focus', function () { release(); focusStage(); after(); updateClock(); });
   document.addEventListener('visibilitychange', function () {
     heldKeys = {};
-    if (document.hidden) { pauseRotation(); clearTimeout(clockTimer); }
-    else { release(); after(); updateClock(); focusStage(); }
+    if (document.hidden) {
+      pauseRotation(); clearTimeout(clockTimer); clearTimeout(bounceTimer);
+      if (window.tizen && Date.now() - lastLaunchAt > 8000) bounceTimer = setTimeout(bounceBack, 1500);
+    }
+    else { clearTimeout(bounceTimer); stopWatch(); release(); after(); updateClock(); focusStage(); }
   });
   window.addEventListener('resize', fit);
+
 
   /* Readable browser checks use the real state and actions, without fake outcomes. */
   var NAV = { left: 'left', right: 'right', up: 'up', down: 'down', ok: 'ok', enter: 'ok', back: 'back', escape: 'back' };

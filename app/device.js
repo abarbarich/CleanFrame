@@ -48,6 +48,21 @@
     } catch (err) { finish(failure(err)); }
   }
   function home(done) { launchApp('com.samsung.tv.csfs', done); }
+  function inputs(done) {
+    if (!api()) { unavailable(done); return; }
+    var finish = bounded(done);
+    function fallback() {
+      try { api().launch('com.samsung.tv.csfs', function () { finish(null); }, function (err) { finish(failure(err)); }); }
+      catch (err) { finish(failure(err)); }
+    }
+    try {
+      var data = [new tizen.ApplicationControlData('entry_point', ['smarthub_key']),
+        new tizen.ApplicationControlData('switch_page', ['d/menu.category']),
+        new tizen.ApplicationControlData('__COBA_REQUEST_FOCUS_ON__', ['s/source'])];
+      var control = new tizen.ApplicationControl('http://tizen.org/appcontrol/operation/default', null, null, null, data);
+      api().launchAppControl(control, 'com.samsung.tv.csfs', function () { finish(null); }, function () { fallback(); });
+    } catch (err) { fallback(); }
+  }
   function settings(done) { launchApp('com.samsung.tv.coba.setting', done); }
   function apps(done) {
     if (!api()) { unavailable(done); return; }
@@ -70,5 +85,5 @@
       }, function (err) { finish(failure(err)); });
     } catch (err) { finish(failure(err)); }
   }
-  window.FrameDevice = { launch: launch, launchApp: launchApp, art: art, home: home, settings: settings, apps: apps };
+  window.FrameDevice = { launch: launch, launchApp: launchApp, art: art, home: home, inputs: inputs, settings: settings, apps: apps };
 }());
